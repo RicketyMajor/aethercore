@@ -1,0 +1,3 @@
+/home/alonso/dev/aethercore/build/CMakeFiles/aethercore.dir
+/home/alonso/dev/aethercore/build/CMakeFiles/edit_cache.dir
+/home/alonso/dev/aethercore/build/CMakeFiles/rebuild_cache.dir

@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/aethercore.dir/src/main.cpp.o -o aethercore 
