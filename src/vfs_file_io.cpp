@@ -292,15 +292,18 @@ bool aether_rm(const std::string &path)
         return false;
     }
 
-    Inode *target_inode = get_inode_ptr(target_id);
+    // Eliminar la entrada del directorio padre primero
+    if (!aether_unlink_entry(path))
+    {
+        std::cerr << "[ERROR] No se pudo desvincular del directorio padre.\n";
+        return false;
+    }
 
-    // Bloqueo exclusivo para evitar que otro hilo lea mientras se destruye
+    Inode *target_inode = get_inode_ptr(target_id);
     std::unique_lock<std::shared_mutex> lock(target_inode->rw_lock);
 
-    // Recuperar todos los bloques físicos al Bitmap
+    // Recuperar bloques físicos y Liberar I-nodo
     free_inode_blocks(target_inode);
-
-    // Liberar el I-nodo en la tabla
     aether_free_inode(target_id);
 
     return true;

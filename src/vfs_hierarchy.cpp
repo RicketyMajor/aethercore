@@ -255,6 +255,12 @@ void aether_ls(const std::string &path)
 
         for (uint32_t j = 0; j < entries_in_this_block; ++j)
         {
+            if (entries[j].inode_id == TOMBSTONE_INODE)
+            {
+                entries_checked++;
+                continue; // Saltar entradas borradas
+            }
+
             Inode *child = get_inode_ptr(entries[j].inode_id);
             std::string type_str = (child->type == FileType::DIRECTORY) ? "DIR" : "FILE";
 
@@ -290,4 +296,44 @@ int32_t aether_find_inode_by_path(const std::string &path)
     }
 
     return current_inode_id;
+}
+
+bool aether_unlink_entry(const std::string &path)
+{
+    std::string target_name;
+    int32_t parent_id = resolve_parent_directory(path, target_name);
+
+    if (parent_id == -1)
+        return false;
+
+    Inode *parent_inode = get_inode_ptr(parent_id);
+    std::unique_lock<std::shared_mutex> lock(parent_inode->rw_lock); // Bloqueo exclusivo
+
+    uint32_t entry_size = sizeof(DirectoryEntry);
+    uint32_t total_entries = parent_inode->size_bytes / entry_size;
+    uint32_t entries_checked = 0;
+
+    for (int i = 0; i < DIRECT_POINTERS && entries_checked < total_entries; ++i)
+    {
+        if (parent_inode->direct_blocks[i] == 0)
+            continue;
+
+        uint8_t *block_ptr = get_block_ptr(parent_inode->direct_blocks[i]);
+        DirectoryEntry *entries = reinterpret_cast<DirectoryEntry *>(block_ptr);
+
+        uint32_t max_entries_in_block = BLOCK_SIZE / entry_size;
+        uint32_t entries_in_this_block = std::min(max_entries_in_block, total_entries - entries_checked);
+
+        for (uint32_t j = 0; j < entries_in_this_block; ++j)
+        {
+            // Busca la entrada ignorando los tombstones
+            if (entries[j].inode_id != TOMBSTONE_INODE && entries[j].name == target_name)
+            {
+                entries[j].inode_id = TOMBSTONE_INODE; // Marca como Lápida
+                return true;
+            }
+            entries_checked++;
+        }
+    }
+    return false;
 }

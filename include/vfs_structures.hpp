@@ -10,7 +10,8 @@ constexpr uint64_t TOTAL_RAM_SIZE = 1024ULL * 1024ULL * 1024ULL; // 1 GB de RAM
 constexpr uint32_t BLOCK_SIZE = 4096;                            // 4 KB por bloque físico
 constexpr uint32_t TOTAL_BLOCKS = TOTAL_RAM_SIZE / BLOCK_SIZE;
 
-constexpr uint32_t MAX_FILENAME = 252; // Para que DirectoryEntry encaje perfectamente en bloques de tamaño potencia de 2
+constexpr uint32_t MAX_FILENAME = 252;           // Para que DirectoryEntry encaje perfectamente en bloques de tamaño potencia de 2
+constexpr uint32_t TOMBSTONE_INODE = 0xFFFFFFFF; // Representa una entrada de directorio borrada
 constexpr uint32_t DIRECT_POINTERS = 12;
 
 // Tipos de archivo

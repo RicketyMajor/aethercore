@@ -62,12 +62,52 @@ void print_help()
     std::cout << "  mkdir <ruta>   : Crea un nuevo directorio\n";
     std::cout << "  touch <ruta>   : Crea un archivo vacio\n";
     std::cout << "  ls <ruta>      : Lista el contenido de un directorio (por defecto /)\n";
+    std::cout << "  cd <ruta>      : Cambia el directorio actual\n";
     std::cout << "  rm <ruta>      : Elimina un archivo o directorio\n";
     std::cout << "  status         : Muestra el estado global de la RAM virtual\n";
     std::cout << "  stress         : Ejecuta la prueba de carga de 10 MB\n";
     std::cout << "  clear          : Limpia la terminal\n";
     std::cout << "  help           : Muestra este menu\n";
     std::cout << "  exit           : Apaga AetherCore y libera la memoria\n\n";
+}
+
+std::string resolve_shell_path(const std::string &cwd, const std::string &arg)
+{
+    if (arg.empty())
+        return cwd;
+
+    // Determinar la ruta base
+    std::string target = (arg[0] == '/') ? arg : (cwd == "/" ? cwd + arg : cwd + "/" + arg);
+
+    // Normalizar la ruta (procesar '..' y '.')
+    std::vector<std::string> tokens;
+    std::stringstream ss(target);
+    std::string token;
+
+    while (std::getline(ss, token, '/'))
+    {
+        if (token == "" || token == ".")
+            continue;
+        if (token == "..")
+        {
+            if (!tokens.empty())
+                tokens.pop_back(); // Retroceder un nivel
+        }
+        else
+        {
+            tokens.push_back(token); // Avanzar un nivel
+        }
+    }
+
+    // Reconstruir el string final
+    std::string final_path = "/";
+    for (size_t i = 0; i < tokens.size(); ++i)
+    {
+        final_path += tokens[i];
+        if (i < tokens.size() - 1)
+            final_path += "/";
+    }
+    return final_path;
 }
 
 int main()
@@ -89,9 +129,11 @@ int main()
     print_help();
 
     std::string input;
+    std::string cwd = "/"; // Estado del Shell
+
     while (true)
     {
-        std::cout << "aether@ubuntu:~# ";
+        std::cout << "aether@ubuntu:" << cwd << "# ";
         std::getline(std::cin, input);
 
         if (input.empty())
@@ -101,33 +143,48 @@ int main()
         std::string command, arg;
         ss >> command >> arg;
 
+        std::string absolute_path = resolve_shell_path(cwd, arg);
+
         if (command == "exit" || command == "quit")
-        {
             break;
+        else if (command == "cd")
+        {
+            if (arg.empty() || arg == "/")
+            {
+                cwd = "/";
+            }
+            else
+            {
+                int32_t id = aether_find_inode_by_path(absolute_path);
+                if (id == -1)
+                    std::cout << "cd: no existe el archivo o el directorio: " << arg << "\n";
+                else
+                    cwd = absolute_path; // Asume que existe y actualiza el prompt
+            }
         }
         else if (command == "mkdir")
         {
             if (arg.empty())
                 std::cout << "Uso: mkdir <ruta>\n";
-            else if (aether_mkdir(arg))
+            else if (aether_mkdir(absolute_path))
                 std::cout << "Directorio creado.\n";
         }
         else if (command == "touch")
         {
             if (arg.empty())
                 std::cout << "Uso: touch <ruta>\n";
-            else if (aether_touch(arg))
+            else if (aether_touch(absolute_path))
                 std::cout << "Archivo creado.\n";
         }
         else if (command == "ls")
         {
-            aether_ls(arg.empty() ? "/" : arg);
+            aether_ls(absolute_path);
         }
         else if (command == "rm")
         {
             if (arg.empty())
                 std::cout << "Uso: rm <ruta>\n";
-            else if (aether_rm(arg))
+            else if (aether_rm(absolute_path))
                 std::cout << "Eliminado.\n";
         }
         else if (command == "status")
