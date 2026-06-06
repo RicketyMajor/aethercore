@@ -1,0 +1,12 @@
+# Directorios de compilación
+build/
+bin/
+obj/
+
+# Archivos de VSCode (opcional, pero recomendado)
+.vscode/
+
+# Archivos objeto y binarios genéricos
+*.o
+*.out
+*.exe

@@ -1,5 +1,6 @@
 #include <iostream>
 #include "vfs_structures.hpp"
+#include "vfs_core.hpp"
 
 int main()
 {
@@ -13,7 +14,17 @@ int main()
     std::cout << "- Total de Bloques: " << TOTAL_BLOCKS << "\n";
     std::cout << "- Tamano de Inode: " << sizeof(Inode) << " Bytes\n";
 
-    // TODO: Llamar a aether_format() en la Fase 1
+    // Formateo lógico
+    if (!aether_format())
+    {
+        std::cerr << "[FATAL] Fallo al formatear el disco virtual en memoria.\n";
+        return 1;
+    }
+
+    std::cout << "-> Sistema de Archivos montado y listo.\n\n";
+
+    // Limpieza final (crucial para evitar destrozar la RAM de tu PC)
+    aether_cleanup();
 
     return 0;
 }
