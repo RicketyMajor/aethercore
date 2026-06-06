@@ -267,3 +267,27 @@ void aether_ls(const std::string &path)
     }
     std::cout << "\n";
 }
+
+int32_t aether_find_inode_by_path(const std::string &path)
+{
+    if (path == "/" || path.empty())
+        return 0; // Raíz
+
+    std::vector<std::string> tokens = split_path(path);
+    int32_t current_inode_id = 0; // Comenzar en root
+
+    for (const auto &token : tokens)
+    {
+        Inode *curr_inode = get_inode_ptr(current_inode_id);
+        if (!curr_inode)
+            return -1;
+
+        current_inode_id = find_in_directory(curr_inode, token);
+        if (current_inode_id == -1)
+        {
+            return -1; // Algún componente de la ruta no existe
+        }
+    }
+
+    return current_inode_id;
+}
