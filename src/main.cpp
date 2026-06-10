@@ -149,6 +149,8 @@ std::string resolve_shell_path(const std::string &cwd, const std::string &arg)
     return final_path;
 }
 
+std::unique_ptr<AetherDatabase> aether_db = nullptr;
+
 int main()
 {
     // Limpiar pantalla al estilo Linux
@@ -243,19 +245,64 @@ int main()
         else if (command == "dbinit")
         {
             if (arg.empty())
-            {
                 std::cout << "Uso: dbinit <nombre_db>\n";
-            }
             else
             {
-                AetherDatabase db(arg, 0); // 0 = autodetección de hilos
-                db.format_db();
-
-                // ls automático para ver el resultado
-                std::string absolute_db_path = resolve_shell_path(cwd, arg);
-                std::cout << "\nVerificando VFS...\n";
-                aether_ls(absolute_db_path);
+                aether_db = std::make_unique<AetherDatabase>(arg, 0);
+                aether_db->format_db();
+                std::cout << "[INFO] Motor conectado a la DB.\n";
             }
+        }
+        else if (command == "set")
+        {
+            if (!aether_db)
+            {
+                std::cout << "Inicializa una db primero con dbinit.\n";
+                continue;
+            }
+            std::string payload;
+
+            // Extraer el resto de la línea directamente desde el stringstream
+            std::getline(ss >> std::ws, payload);
+
+            if (payload.empty())
+            {
+                std::cout << "Uso: set <llave> <valor>\n";
+                continue;
+            }
+
+            auto future_res = aether_db->store(arg, payload);
+            DBResponse res = future_res.get();
+            if (res.status == DBStatus::OK)
+                std::cout << "Guardado correctamente.\n";
+            else
+                std::cout << "Error al guardar (DB llena o limite excedido).\n";
+        }
+        else if (command == "get")
+        {
+            if (!aether_db)
+            {
+                std::cout << "Inicializa una db primero con dbinit.\n";
+                continue;
+            }
+            auto future_res = aether_db->fetch(arg);
+            DBResponse res = future_res.get();
+            if (res.status == DBStatus::OK)
+                std::cout << "Valor: " << res.payload << "\n";
+            else
+                std::cout << "No encontrado o eliminado.\n";
+        }
+        else if (command == "del")
+        {
+            if (!aether_db)
+            {
+                std::cout << "Inicializa una db primero con dbinit.\n";
+                continue;
+            }
+            auto future_res = aether_db->remove(arg);
+            DBResponse res = future_res.get();
+            if (res.status == DBStatus::OK)
+                std::cout << "Registro borrado (Tombstone aplicado).\n";
         }
         else if (command == "clear")
         {

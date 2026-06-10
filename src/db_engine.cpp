@@ -87,3 +87,187 @@ bool AetherDatabase::format_db()
 
     return true;
 }
+
+// ==========================================
+// MOTOR DE HASH Y OPERACIONES INTERNAS
+// ==========================================
+
+// Algoritmo FNV-1a: Extremadamente rápido y con gran dispersión para strings
+uint32_t AetherDatabase::calculate_hash(const std::string &key)
+{
+    uint32_t hash = 2166136261u;
+    for (char c : key)
+    {
+        hash ^= static_cast<uint8_t>(c);
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+DBResponse AetherDatabase::internal_store(std::string key, std::string payload)
+{
+    DBResponse response;
+    response.status = DBStatus::ERROR;
+    if (key.length() >= MAX_KEY_LEN || payload.length() >= MAX_PAYLOAD_SIZE)
+        return response;
+
+    uint32_t hash = calculate_hash(key);
+
+    // Direccionamiento Abierto (Linear Probing) para colisiones
+    for (uint32_t i = 0; i < HASH_TABLE_BUCKETS; ++i)
+    {
+        uint32_t bucket_idx = (hash + i) % HASH_TABLE_BUCKETS;
+
+        // Bloqueo Exclusivo (Write Lock) SOLO para este bucket específico
+        std::unique_lock<std::shared_mutex> lock(bucket_locks[bucket_idx].rw_lock);
+
+        int32_t fd_idx = aether_open(idx_path, FileMode::READ);
+        aether_seek(fd_idx, sizeof(IndexHeader) + bucket_idx * sizeof(IndexRecord));
+        IndexRecord record;
+        aether_read(fd_idx, reinterpret_cast<uint8_t *>(&record), sizeof(IndexRecord));
+        aether_close(fd_idx);
+
+        bool is_empty = (record.key_len == 0 && record.data_offset == TOMBSTONE_OFFSET);
+        bool is_match = (record.key_len == key.length() && std::strncmp(record.key, key.c_str(), key.length()) == 0);
+
+        if (is_empty || is_match)
+        {
+            // Guardar Payload en .dat (Append Only)
+            int32_t fd_dat = aether_open(dat_path, FileMode::APPEND);
+            uint32_t payload_offset = aether_tell(fd_dat);
+
+            DataRecordHeader d_header;
+            d_header.payload_len = payload.length();
+            aether_write(fd_dat, reinterpret_cast<const uint8_t *>(&d_header), sizeof(DataRecordHeader));
+            aether_write(fd_dat, reinterpret_cast<const uint8_t *>(payload.c_str()), payload.length());
+            aether_close(fd_dat);
+
+            // Actualizar Tabla Hash en .idx
+            record.key_hash = hash;
+            record.data_offset = payload_offset;
+            record.key_len = key.length();
+            std::memset(record.key, 0, MAX_KEY_LEN);
+            std::strncpy(record.key, key.c_str(), MAX_KEY_LEN - 1);
+
+            int32_t fd_idx_write = aether_open(idx_path, FileMode::WRITE);
+            aether_seek(fd_idx_write, sizeof(IndexHeader) + bucket_idx * sizeof(IndexRecord));
+            aether_write(fd_idx_write, reinterpret_cast<const uint8_t *>(&record), sizeof(IndexRecord));
+            aether_close(fd_idx_write);
+
+            response.status = DBStatus::OK;
+            response.payload_len = 0;
+            return response; // Al salir del if, el unique_lock se destruye automáticamente liberando el candado
+        }
+    }
+    return response; // DB Llena
+}
+
+DBResponse AetherDatabase::internal_fetch(std::string key)
+{
+    DBResponse response;
+    response.status = DBStatus::NOT_FOUND;
+    uint32_t hash = calculate_hash(key);
+
+    for (uint32_t i = 0; i < HASH_TABLE_BUCKETS; ++i)
+    {
+        uint32_t bucket_idx = (hash + i) % HASH_TABLE_BUCKETS;
+
+        // Bloqueo Compartido (Read Lock): Miles de hilos pueden leer el mismo bucket a la vez
+        std::shared_lock<std::shared_mutex> lock(bucket_locks[bucket_idx].rw_lock);
+
+        int32_t fd_idx = aether_open(idx_path, FileMode::READ);
+        aether_seek(fd_idx, sizeof(IndexHeader) + bucket_idx * sizeof(IndexRecord));
+        IndexRecord record;
+        aether_read(fd_idx, reinterpret_cast<uint8_t *>(&record), sizeof(IndexRecord));
+        aether_close(fd_idx);
+
+        if (record.key_len == 0 && record.data_offset == TOMBSTONE_OFFSET)
+        {
+            return response; // Encuentra un espacio virgen, la llave no existe
+        }
+
+        if (record.key_len == key.length() && std::strncmp(record.key, key.c_str(), key.length()) == 0)
+        {
+            if (record.data_offset == TOMBSTONE_OFFSET)
+                return response; // Existe, pero fue borrada lógicamente
+
+            // Encontrada: Lee el payload del archivo de datos
+            int32_t fd_dat = aether_open(dat_path, FileMode::READ);
+            aether_seek(fd_dat, record.data_offset);
+
+            DataRecordHeader d_header;
+            aether_read(fd_dat, reinterpret_cast<uint8_t *>(&d_header), sizeof(DataRecordHeader));
+
+            uint32_t read_len = std::min(d_header.payload_len, MAX_PAYLOAD_SIZE - 1);
+            aether_read(fd_dat, reinterpret_cast<uint8_t *>(response.payload), read_len);
+            response.payload[read_len] = '\0';
+
+            response.payload_len = read_len;
+            response.status = DBStatus::OK;
+            aether_close(fd_dat);
+            return response;
+        }
+    }
+    return response;
+}
+
+DBResponse AetherDatabase::internal_remove(std::string key)
+{
+    DBResponse response;
+    response.status = DBStatus::NOT_FOUND;
+    uint32_t hash = calculate_hash(key);
+
+    for (uint32_t i = 0; i < HASH_TABLE_BUCKETS; ++i)
+    {
+        uint32_t bucket_idx = (hash + i) % HASH_TABLE_BUCKETS;
+        std::unique_lock<std::shared_mutex> lock(bucket_locks[bucket_idx].rw_lock);
+
+        int32_t fd_idx = aether_open(idx_path, FileMode::READ);
+        aether_seek(fd_idx, sizeof(IndexHeader) + bucket_idx * sizeof(IndexRecord));
+        IndexRecord record;
+        aether_read(fd_idx, reinterpret_cast<uint8_t *>(&record), sizeof(IndexRecord));
+        aether_close(fd_idx);
+
+        if (record.key_len == 0 && record.data_offset == TOMBSTONE_OFFSET)
+            return response;
+
+        if (record.key_len == key.length() && std::strncmp(record.key, key.c_str(), key.length()) == 0)
+        {
+            if (record.data_offset != TOMBSTONE_OFFSET)
+            {
+                record.data_offset = TOMBSTONE_OFFSET; // Borrado Lógico: Marcado como Tombstone
+
+                int32_t fd_idx_write = aether_open(idx_path, FileMode::WRITE);
+                aether_seek(fd_idx_write, sizeof(IndexHeader) + bucket_idx * sizeof(IndexRecord));
+                aether_write(fd_idx_write, reinterpret_cast<const uint8_t *>(&record), sizeof(IndexRecord));
+                aether_close(fd_idx_write);
+
+                response.status = DBStatus::OK;
+            }
+            return response;
+        }
+    }
+    return response;
+}
+
+// ==========================================
+// WRAPPERS ASÍNCRONOS PÚBLICOS (Encolado al ThreadPool)
+// ==========================================
+
+std::future<DBResponse> AetherDatabase::store(const std::string &key, const std::string &payload)
+{
+    return thread_pool->submit_task([this, key, payload]()
+                                    { return internal_store(key, payload); });
+}
+
+std::future<DBResponse> AetherDatabase::fetch(const std::string &key)
+{
+    return thread_pool->submit_task([this, key]()
+                                    { return internal_fetch(key); });
+}
+
+std::future<DBResponse> AetherDatabase::remove(const std::string &key)
+{
+    return thread_pool->submit_task([this, key]()
+                                    { return internal_remove(key); });
+}

@@ -178,6 +178,7 @@ int32_t aether_write(int32_t fd, const uint8_t *buffer, uint32_t bytes)
         }
     }
 
+    lock.unlock();
     // Actualizar el offset en la tabla global
     std::lock_guard<std::mutex> oft_lock(oft_mutex);
     open_file_table[fd].offset = ofd.offset;
@@ -226,6 +227,8 @@ int32_t aether_read(int32_t fd, uint8_t *buffer, uint32_t bytes)
         ofd.offset += bytes_to_read_chunk;
         bytes_read += bytes_to_read_chunk;
     }
+
+    lock.unlock();
 
     std::lock_guard<std::mutex> oft_lock(oft_mutex);
     open_file_table[fd].offset = ofd.offset;
