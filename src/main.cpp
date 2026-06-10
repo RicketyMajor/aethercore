@@ -8,6 +8,7 @@
 #include "vfs_allocator.hpp"
 #include "vfs_hierarchy.hpp"
 #include "vfs_file_io.hpp"
+#include "thread_pool.hpp"
 
 // ==========================================
 // FUNCIÓN DE ESTRÉS (10 MB TEST)
@@ -54,6 +55,41 @@ void run_stress_test()
 }
 
 // ==========================================
+// FUNCIÓN DE PRUEBA DEL THREAD POOL
+// ==========================================
+void run_pool_test()
+{
+    std::cout << "\n[!] Iniciando prueba del Thread Pool...\n";
+
+    // Instanciar el pool pidiendo que detecte los núcleos automáticamente (pasando 0)
+    AetherThreadPool pool(0);
+
+    std::vector<std::future<int>> results;
+
+    std::cout << "-> Despachando 50 tareas matemáticas concurrentes...\n";
+    for (int i = 0; i < 50; ++i)
+    {
+        // submit_task devuelve un std::future
+        results.push_back(
+            pool.submit_task([i]()
+                             {
+                // Simulamos un trabajo
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                return i * i; }));
+    }
+
+    std::cout << "-> Tareas encoladas. Esperando resolucion asincrona...\n";
+
+    int sum = 0;
+    for (auto &future_res : results)
+    {
+        sum += future_res.get(); // get() bloquea hasta que el hilo termina su tarea específica
+    }
+
+    std::cout << "-> Todas las tareas completadas. Suma de cuadrados: " << sum << "\n\n";
+}
+
+// ==========================================
 // TERMINAL INTERACTIVA (CLI)
 // ==========================================
 void print_help()
@@ -66,6 +102,7 @@ void print_help()
     std::cout << "  rm <ruta>      : Elimina un archivo o directorio\n";
     std::cout << "  status         : Muestra el estado global de la RAM virtual\n";
     std::cout << "  stress         : Ejecuta la prueba de carga de 10 MB\n";
+    std::cout << "  pool           : Prueba la concurrencia del Thread Pool\n";
     std::cout << "  clear          : Limpia la terminal\n";
     std::cout << "  help           : Muestra este menu\n";
     std::cout << "  exit           : Apaga AetherCore y libera la memoria\n\n";
@@ -196,6 +233,10 @@ int main()
         else if (command == "stress")
         {
             run_stress_test();
+        }
+        else if (command == "pool")
+        {
+            run_pool_test();
         }
         else if (command == "clear")
         {
