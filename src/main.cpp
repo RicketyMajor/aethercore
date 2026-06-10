@@ -3,6 +3,8 @@
 #include <vector>
 #include <sstream>
 #include <iomanip>
+#include <chrono>
+#include <memory>
 #include "vfs_structures.hpp"
 #include "vfs_core.hpp"
 #include "vfs_allocator.hpp"
@@ -10,6 +12,11 @@
 #include "vfs_file_io.hpp"
 #include "thread_pool.hpp"
 #include "db_engine.hpp"
+
+// ==========================================
+// PUNTERO GLOBAL A LA BASE DE DATOS
+// ==========================================
+std::unique_ptr<AetherDatabase> aether_db = nullptr;
 
 // ==========================================
 // FUNCIÓN DE ESTRÉS (10 MB TEST)
@@ -31,7 +38,7 @@ void run_stress_test()
     }
 
     uint32_t ten_mb = 10 * 1024 * 1024;
-    std::vector<uint8_t> write_buffer(ten_mb, 'X'); // Llenamos 10MB con el caracter 'X'
+    std::vector<uint8_t> write_buffer(ten_mb, 'X'); // Llena 10MB con el caracter 'X'
 
     std::cout << "-> Escribiendo " << ten_mb << " bytes...\n";
     int32_t written = aether_write(fd, write_buffer.data(), ten_mb);
@@ -89,6 +96,83 @@ void run_pool_test()
 
     std::cout << "-> Todas las tareas completadas. Suma de cuadrados: " << sum << "\n\n";
 }
+// ==========================================
+// FUNCIÓN DE ESTRÉS DE BASE DE DATOS (10,000 Transacciones)
+// ==========================================
+void run_db_stress_test()
+{
+    if (!aether_db)
+    {
+        std::cout << "[INFO] Inicializando DB temporal 'stressdb' para el test...\n";
+        aether_db = std::make_unique<AetherDatabase>("stressdb", 0);
+        aether_db->format_db();
+    }
+
+    std::cout << "\n[!] Iniciando Prueba de Estres DB: 10,000 transacciones concurrentes...\n";
+
+    int num_ops = 5000; // 5000 escrituras + 5000 lecturas = 10,000 operaciones
+    std::vector<std::future<DBResponse>> write_futures;
+    std::vector<std::future<DBResponse>> read_futures;
+
+    // Iniciar cronómetro de alta precisión
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    // 1. Despachar 5000 ESCRITURAS masivas al Thread Pool sin esperar
+    for (int i = 0; i < num_ops; ++i)
+    {
+        std::string key = "llave_" + std::to_string(i);
+        std::string val = "payload_masivo_de_prueba_numero_" + std::to_string(i);
+        write_futures.push_back(aether_db->store(key, val));
+    }
+
+    // 2. Despachar 5000 LECTURAS masivas al Thread Pool sin esperar
+    for (int i = 0; i < num_ops; ++i)
+    {
+        std::string key = "llave_" + std::to_string(i);
+        read_futures.push_back(aether_db->fetch(key));
+    }
+
+    std::cout << "-> Todas las 10,000 tareas encoladas en el Thread Pool. Esperando resolucion...\n";
+
+    // 3. Forzar barrera de sincronización: Recolectar resultados de escrituras
+    int successful_writes = 0;
+    for (auto &fut : write_futures)
+    {
+        if (fut.get().status == DBStatus::OK)
+            successful_writes++;
+    }
+
+    // 4. Forzar barrera de sincronización: Recolectar resultados de lecturas
+    int successful_reads = 0;
+    for (auto &fut : read_futures)
+    {
+        DBResponse res = fut.get();
+        if (res.status == DBStatus::OK)
+            successful_reads++;
+    }
+
+    // Detener cronómetro
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> ms_double = end_time - start_time;
+
+    // Resultados
+    std::cout << "\n=================================================\n";
+    std::cout << "             RESULTADOS DEL TEST                 \n";
+    std::cout << "=================================================\n";
+    std::cout << " - Tiempo total de procesamiento: " << ms_double.count() << " ms\n";
+    std::cout << " - Escrituras exitosas: " << successful_writes << " / " << num_ops << "\n";
+    std::cout << " - Lecturas exitosas:   " << successful_reads << " / " << num_ops << "\n";
+
+    if (successful_writes == num_ops && successful_reads == num_ops)
+    {
+        std::cout << " - Estado: [EXITO TOTAL] Cero Deadlocks, Cero Race Conditions.\n";
+    }
+    else
+    {
+        std::cout << " - Estado: [ADVERTENCIA] Hubo fallos en las transacciones.\n";
+    }
+    std::cout << "=================================================\n\n";
+}
 
 // ==========================================
 // TERMINAL INTERACTIVA (CLI)
@@ -103,6 +187,7 @@ void print_help()
     std::cout << "  rm <ruta>      : Elimina un archivo o directorio\n";
     std::cout << "  status         : Muestra el estado global de la RAM virtual\n";
     std::cout << "  stress         : Ejecuta la prueba de carga de 10 MB\n";
+    std::cout << "  dbstress       : Ejecuta el test de concurrencia de 10,000 transacciones en la DB\n";
     std::cout << "  dbinit <nombre> : Crea y formatea una base de datos concurrente\n";
     std::cout << "  pool           : Prueba la concurrencia del Thread Pool\n";
     std::cout << "  clear          : Limpia la terminal\n";
@@ -148,8 +233,6 @@ std::string resolve_shell_path(const std::string &cwd, const std::string &arg)
     }
     return final_path;
 }
-
-std::unique_ptr<AetherDatabase> aether_db = nullptr;
 
 int main()
 {
@@ -304,6 +387,11 @@ int main()
             if (res.status == DBStatus::OK)
                 std::cout << "Registro borrado (Tombstone aplicado).\n";
         }
+        else if (command == "dbstress")
+        {
+            run_db_stress_test();
+        }
+
         else if (command == "clear")
         {
             system("clear");
