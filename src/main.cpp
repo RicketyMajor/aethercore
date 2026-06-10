@@ -9,6 +9,7 @@
 #include "vfs_hierarchy.hpp"
 #include "vfs_file_io.hpp"
 #include "thread_pool.hpp"
+#include "db_engine.hpp"
 
 // ==========================================
 // FUNCIÓN DE ESTRÉS (10 MB TEST)
@@ -102,6 +103,7 @@ void print_help()
     std::cout << "  rm <ruta>      : Elimina un archivo o directorio\n";
     std::cout << "  status         : Muestra el estado global de la RAM virtual\n";
     std::cout << "  stress         : Ejecuta la prueba de carga de 10 MB\n";
+    std::cout << "  dbinit <nombre> : Crea y formatea una base de datos concurrente\n";
     std::cout << "  pool           : Prueba la concurrencia del Thread Pool\n";
     std::cout << "  clear          : Limpia la terminal\n";
     std::cout << "  help           : Muestra este menu\n";
@@ -237,6 +239,23 @@ int main()
         else if (command == "pool")
         {
             run_pool_test();
+        }
+        else if (command == "dbinit")
+        {
+            if (arg.empty())
+            {
+                std::cout << "Uso: dbinit <nombre_db>\n";
+            }
+            else
+            {
+                AetherDatabase db(arg, 0); // 0 = autodetección de hilos
+                db.format_db();
+
+                // ls automático para ver el resultado
+                std::string absolute_db_path = resolve_shell_path(cwd, arg);
+                std::cout << "\nVerificando VFS...\n";
+                aether_ls(absolute_db_path);
+            }
         }
         else if (command == "clear")
         {

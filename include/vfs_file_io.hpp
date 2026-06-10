@@ -17,3 +17,6 @@ int32_t aether_write(int32_t fd, const uint8_t *buffer, uint32_t bytes);
 int32_t aether_read(int32_t fd, uint8_t *buffer, uint32_t bytes);
 
 bool aether_rm(const std::string &path);
+
+void aether_seek(int32_t fd, uint32_t offset);
+uint32_t aether_tell(int32_t fd);

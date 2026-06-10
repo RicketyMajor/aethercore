@@ -308,3 +308,24 @@ bool aether_rm(const std::string &path)
 
     return true;
 }
+
+void aether_seek(int32_t fd, uint32_t offset)
+{
+    std::lock_guard<std::mutex> lock(oft_mutex);
+    auto it = open_file_table.find(fd);
+    if (it != open_file_table.end())
+    {
+        it->second.offset = offset;
+    }
+}
+
+uint32_t aether_tell(int32_t fd)
+{
+    std::lock_guard<std::mutex> lock(oft_mutex);
+    auto it = open_file_table.find(fd);
+    if (it != open_file_table.end())
+    {
+        return it->second.offset;
+    }
+    return 0;
+}
