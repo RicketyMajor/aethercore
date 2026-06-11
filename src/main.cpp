@@ -399,6 +399,7 @@ int main()
             aether_broker = std::make_unique<AetherBroker>();
             if (aether_broker->initialize())
             {
+                aether_broker->start();
                 std::cout << "[OK] El Broker levanto los descriptores de red con exito.\n";
             }
         }
