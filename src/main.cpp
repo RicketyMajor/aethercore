@@ -12,11 +12,13 @@
 #include "vfs_file_io.hpp"
 #include "thread_pool.hpp"
 #include "db_engine.hpp"
+#include "aether_broker.hpp"
 
 // ==========================================
 // PUNTERO GLOBAL A LA BASE DE DATOS
 // ==========================================
 std::unique_ptr<AetherDatabase> aether_db = nullptr;
+std::unique_ptr<AetherBroker> aether_broker = nullptr;
 
 // ==========================================
 // FUNCIÓN DE ESTRÉS (10 MB TEST)
@@ -188,6 +190,7 @@ void print_help()
     std::cout << "  status         : Muestra el estado global de la RAM virtual\n";
     std::cout << "  stress         : Ejecuta la prueba de carga de 10 MB\n";
     std::cout << "  dbstress       : Ejecuta el test de concurrencia de 10,000 transacciones en la DB\n";
+    std::cout << "  broker_init    : Inicializa los sockets de escucha del Broker\n";
     std::cout << "  dbinit <nombre> : Crea y formatea una base de datos concurrente\n";
     std::cout << "  pool           : Prueba la concurrencia del Thread Pool\n";
     std::cout << "  clear          : Limpia la terminal\n";
@@ -390,6 +393,14 @@ int main()
         else if (command == "dbstress")
         {
             run_db_stress_test();
+        }
+        else if (command == "broker_init")
+        {
+            aether_broker = std::make_unique<AetherBroker>();
+            if (aether_broker->initialize())
+            {
+                std::cout << "[OK] El Broker levanto los descriptores de red con exito.\n";
+            }
         }
 
         else if (command == "clear")
