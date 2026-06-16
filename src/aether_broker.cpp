@@ -215,11 +215,112 @@ void AetherBroker::dispatcher_loop()
                 epoll_ctl(epoll_fd, EPOLL_CTL_DEL, current_fd, nullptr);
                 session_manager.remove_session(current_fd);
             }
-            // 3. Un cliente nos acaba de enviar datos (Fase 3)
+            // 3. Un cliente nos acaba de enviar datos
             else if (events[i].events & EPOLLIN)
             {
-                // Por ahora no lo lee, pero en la Fase 3 aquí inyectaremos el parsing
+                handle_client_data(current_fd);
             }
         }
+    }
+}
+
+// ==========================================
+// LECTURA Y FRAMING DEL BYTE-STREAM
+// ==========================================
+
+void AetherBroker::handle_client_data(int client_fd)
+{
+    Session *session = session_manager.get_session(client_fd);
+    if (!session)
+        return;
+
+    char temp_buffer[4096]; // Buffer temporal para leer del socket
+
+    while (true)
+    {
+        // Leer en modo No-Bloqueante
+        ssize_t bytes_read = recv(client_fd, temp_buffer, sizeof(temp_buffer), 0);
+
+        if (bytes_read > 0)
+        {
+            // Añadir los nuevos bytes al buffer histórico de la sesión
+            session->read_buffer.insert(session->read_buffer.end(), temp_buffer, temp_buffer + bytes_read);
+        }
+        else if (bytes_read == 0)
+        {
+            // El cliente cerró la conexión ordenadamente (Half-close)
+            epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, nullptr);
+            session_manager.remove_session(client_fd);
+            break;
+        }
+        else
+        { // bytes_read == -1
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            {
+                // Ya no hay más datos por leer en el buffer del kernel en este momento.
+                // Procesa lo que haya acumulado.
+                process_session_buffer(session);
+                break;
+            }
+            else
+            {
+                std::cerr << "[Broker ERROR] Fallo al leer del FD " << client_fd << ".\n";
+                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, nullptr);
+                session_manager.remove_session(client_fd);
+                break;
+            }
+        }
+    }
+}
+
+void AetherBroker::process_session_buffer(Session *session)
+{
+    // Usa un bucle while porque el cliente pudo haber mandado múltiples paquetes de golpe (Pipelining)
+    while (true)
+    {
+        // 1. Se tienen suficientes bytes para el AetherHeader (12 bytes)?
+        if (session->read_buffer.size() < sizeof(AetherHeader))
+        {
+            break; // Faltan datos, esperamos al siguiente evento epoll
+        }
+
+        // 2. Leer el Header temporalmente
+        AetherHeader header;
+        std::memcpy(&header, session->read_buffer.data(), sizeof(AetherHeader));
+
+        // 3. Calcular el tamaño total del paquete (Header + Key + Payload)
+        // Ojo: En un diseño real robusto, validaría que el tamaño no exceda un límite máximo para evitar ataques OOM.
+        uint32_t total_packet_size = sizeof(AetherHeader) + header.key_len + header.payload_len;
+
+        // 4. ¿Se tiene el paquete completo en el buffer?
+        if (session->read_buffer.size() < total_packet_size)
+        {
+            break; // Tiene el header, pero el resto de los datos aún vienen en camino por la red
+        }
+
+        // 5. ¡SE TIENE EL PAQUETE COMPLETO! se extrae.
+        uint32_t opcode_int = static_cast<uint32_t>(header.opcode);
+
+        // Extracción visual para logs (Para validación en esta Fase 3)
+        std::string extracted_key(
+            session->read_buffer.begin() + sizeof(AetherHeader),
+            session->read_buffer.begin() + sizeof(AetherHeader) + header.key_len);
+
+        std::string extracted_payload(
+            session->read_buffer.begin() + sizeof(AetherHeader) + header.key_len,
+            session->read_buffer.begin() + total_packet_size);
+
+        std::cout << "[Broker] PAQUETE COMPLETADO (FD " << session->fd << "):\n"
+                  << "  -> Opcode : " << opcode_int << "\n"
+                  << "  -> Llave  : " << extracted_key << "\n"
+                  << "  -> Payload: " << extracted_payload << "\n\n";
+
+        // 6. Limpiar del buffer los bytes que ya procesamos para procesar el siguiente paquete
+        session->read_buffer.erase(session->read_buffer.begin(), session->read_buffer.begin() + total_packet_size);
+
+        // *************************************************************
+        // AQUÍ ES DONDE, EN LA FASE 4, ENVIAREMOS ESTO AL THREAD POOL
+        // Y A LA BASE DE DATOS PARA EJECUTAR EL CRUD CONCURRENTE.
+        // *************************************************************
     }
 }

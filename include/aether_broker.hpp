@@ -40,4 +40,8 @@ private:
     // Funciones del Motor de Eventos (Reactor)
     void dispatcher_loop();
     void handle_new_connection(int server_fd);
+
+    // --- NUEVAS FUNCIONES FASE 3 ---
+    void handle_client_data(int client_fd);
+    void process_session_buffer(Session *session);
 };
