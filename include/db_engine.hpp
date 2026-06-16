@@ -25,6 +25,11 @@ public:
     std::future<DBResponse> fetch(const std::string &key);
     std::future<DBResponse> remove(const std::string &key);
 
+    AetherThreadPool *get_pool() { return thread_pool.get(); }
+    DBResponse store_sync(const std::string &key, const std::string &payload) { return internal_store(key, payload); }
+    DBResponse fetch_sync(const std::string &key) { return internal_fetch(key); }
+    DBResponse remove_sync(const std::string &key) { return internal_remove(key); }
+
 private:
     std::string db_name;
     std::string idx_path;

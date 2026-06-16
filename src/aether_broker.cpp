@@ -6,6 +6,9 @@
 #include <unistd.h>
 #include <iostream>
 #include <cstring>
+#include <sys/eventfd.h>
+#include "db_engine.hpp"
+extern std::unique_ptr<AetherDatabase> aether_db;
 
 AetherBroker::AetherBroker() : tcp_server_fd(-1), unix_server_fd(-1), epoll_fd(-1), is_running(false) {}
 
@@ -129,6 +132,16 @@ bool AetherBroker::initialize()
     event.data.fd = unix_server_fd;
     epoll_ctl(epoll_fd, EPOLL_CTL_ADD, unix_server_fd, &event);
 
+    // Inicializar eventfd en modo No-Bloqueante
+    notify_fd = eventfd(0, EFD_NONBLOCK);
+    if (notify_fd == -1)
+        return false;
+
+    std::memset(&event, 0, sizeof(event));
+    event.events = EPOLLIN;
+    event.data.fd = notify_fd;
+    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, notify_fd, &event);
+
     return true;
 }
 
@@ -204,21 +217,41 @@ void AetherBroker::dispatcher_loop()
         {
             int current_fd = events[i].data.fd;
 
-            // 1. Un nuevo cliente intenta conectarse
             if (current_fd == tcp_server_fd || current_fd == unix_server_fd)
             {
                 handle_new_connection(current_fd);
             }
-            // 2. El cliente cerró la conexión o la red falló
+            else if (current_fd == notify_fd)
+            {
+                // El Thread Pool tocó la campana: Hay respuestas listas
+                uint64_t u;
+                read(notify_fd, &u, sizeof(uint64_t)); // Limpiar la campana
+
+                std::lock_guard<std::mutex> lock(pending_writes_mutex);
+                while (!fds_with_pending_writes.empty())
+                {
+                    int fd = fds_with_pending_writes.front();
+                    fds_with_pending_writes.pop();
+
+                    // Activa la vigilancia de EPOLLOUT para este cliente
+                    struct epoll_event event;
+                    event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+                    event.data.fd = fd;
+                    epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &event);
+                }
+            }
             else if (events[i].events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP))
             {
                 epoll_ctl(epoll_fd, EPOLL_CTL_DEL, current_fd, nullptr);
                 session_manager.remove_session(current_fd);
             }
-            // 3. Un cliente nos acaba de enviar datos
             else if (events[i].events & EPOLLIN)
             {
                 handle_client_data(current_fd);
+            }
+            else if (events[i].events & EPOLLOUT)
+            {
+                handle_client_write(current_fd);
             }
         }
     }
@@ -318,9 +351,92 @@ void AetherBroker::process_session_buffer(Session *session)
         // 6. Limpiar del buffer los bytes que ya procesamos para procesar el siguiente paquete
         session->read_buffer.erase(session->read_buffer.begin(), session->read_buffer.begin() + total_packet_size);
 
-        // *************************************************************
-        // AQUÍ ES DONDE, EN LA FASE 4, ENVIAREMOS ESTO AL THREAD POOL
-        // Y A LA BASE DE DATOS PARA EJECUTAR EL CRUD CONCURRENTE.
-        // *************************************************************
+        if (!aether_db)
+        {
+            std::cerr << "[Broker] Base de datos no inicializada. Paquete ignorado.\n";
+            continue;
+        }
+
+        // Copia los datos para evadir problemas de memoria cuando el hilo despierte
+        int c_fd = session->fd;
+        std::string key = extracted_key;
+        std::string payload = extracted_payload;
+
+        // Despacha asíncronamente al Motor Concurrente
+        aether_db->get_pool()->submit_task([this, c_fd, opcode_int, key, payload]()
+                                           {
+            DBResponse db_res;
+            if (opcode_int == 1) db_res = aether_db->store_sync(key, payload);
+            else if (opcode_int == 2) db_res = aether_db->fetch_sync(key);
+            else if (opcode_int == 3) db_res = aether_db->remove_sync(key);
+            else { db_res.status = DBStatus::ERROR; db_res.payload_len = 0; }
+
+            // Empaquetar la respuesta
+            AetherHeader res_header;
+            res_header.opcode = static_cast<AetherOpcode>(opcode_int);
+            res_header.status = static_cast<int32_t>(db_res.status);
+            res_header.key_len = 0;
+            res_header.payload_len = db_res.payload_len;
+
+            std::vector<uint8_t> packet(sizeof(AetherHeader) + db_res.payload_len);
+            std::memcpy(packet.data(), &res_header, sizeof(AetherHeader));
+            if (db_res.payload_len > 0) {
+                std::memcpy(packet.data() + sizeof(AetherHeader), db_res.payload, db_res.payload_len);
+            }
+
+            // Devolver al Broker
+            this->enqueue_response(c_fd, packet); });
+    }
+}
+
+void AetherBroker::enqueue_response(int client_fd, const std::vector<uint8_t> &packet)
+{
+    Session *session = session_manager.get_session(client_fd);
+    if (!session)
+        return; // Cliente desconectado
+
+    {
+        std::lock_guard<std::mutex> lock(session->write_mutex);
+        session->write_queue.push(packet);
+    }
+    {
+        std::lock_guard<std::mutex> lock(pending_writes_mutex);
+        fds_with_pending_writes.push(client_fd);
+    }
+
+    // Tocar la campana eventfd para despertar a epoll_wait
+    uint64_t u = 1;
+    write(notify_fd, &u, sizeof(uint64_t));
+}
+
+void AetherBroker::handle_client_write(int client_fd)
+{
+    Session *session = session_manager.get_session(client_fd);
+    if (!session)
+        return;
+
+    std::lock_guard<std::mutex> lock(session->write_mutex);
+    while (!session->write_queue.empty())
+    {
+        auto &packet = session->write_queue.front();
+        ssize_t sent = send(client_fd, packet.data(), packet.size(), 0);
+
+        if (sent == -1)
+        {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                break; // Buffer de red local lleno
+            else
+                break; // Error de socket
+        }
+        session->write_queue.pop();
+    }
+
+    if (session->write_queue.empty())
+    {
+        // Silenciar EPOLLOUT para no consumir CPU en bucle infinito
+        struct epoll_event event;
+        event.events = EPOLLIN | EPOLLRDHUP;
+        event.data.fd = client_fd;
+        epoll_ctl(epoll_fd, EPOLL_CTL_MOD, client_fd, &event);
     }
 }

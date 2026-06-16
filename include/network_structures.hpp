@@ -4,12 +4,11 @@
 #include <vector>
 #include <queue>
 #include <string>
+#include <mutex>
 
-// Constantes de red
 constexpr int TCP_PORT = 8080;
 constexpr const char *UNIX_SOCKET_PATH = "/tmp/aether.sock";
 
-// Opcodes para el Aether Wire Protocol
 enum class AetherOpcode : uint32_t
 {
     STORE = 1,
@@ -18,26 +17,23 @@ enum class AetherOpcode : uint32_t
     PING = 4
 };
 
-// Aether Wire Protocol Header (Tamaño estricto: 12 bytes)
+// Aether Wire Protocol Header (Tamaño estricto: 16 bytes)
 struct __attribute__((packed)) AetherHeader
 {
     AetherOpcode opcode;
+    int32_t status; // 0 = OK, 1 = NOT_FOUND, etc.
     uint32_t key_len;
     uint32_t payload_len;
 };
 
-// Estructura de Sesión para cada cliente conectado
 struct Session
 {
-    int fd; // File descriptor del socket del cliente
-
-    // Buffer de entrada para ensamblar mensajes fragmentados por TCP
+    int fd;
     std::vector<uint8_t> read_buffer;
 
-    // Cola de salida para mensajes procesados y listos para enviarse al cliente
     std::queue<std::vector<uint8_t>> write_queue;
+    std::mutex write_mutex; // Protege la cola cuando el Thread Pool deposita respuestas
 
-    // Estado de la lectura (Framing)
     bool header_parsed = false;
     AetherHeader current_header;
 };
