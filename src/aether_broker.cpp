@@ -8,6 +8,9 @@
 #include <cstring>
 #include <sys/eventfd.h>
 #include "db_engine.hpp"
+#include <cstdlib>
+#include <string>
+#include <stdexcept>
 extern std::unique_ptr<AetherDatabase> aether_db;
 
 AetherBroker::AetherBroker() : tcp_server_fd(-1), unix_server_fd(-1), epoll_fd(-1), is_running(false) {}
@@ -51,12 +54,25 @@ bool AetherBroker::setup_tcp_socket()
     if (setsockopt(tcp_server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
         return false;
 
-    // 3. Bind al puerto 8080 (Escucha en todas las interfaces de red)
+    // 3. Obtener el puerto desde la variable de entorno AETHER_PORT o usar el defecto
+    int port = TCP_PORT; // 8080 por defecto
+    if (const char *env_port = std::getenv("AETHER_PORT"))
+    {
+        try
+        {
+            port = std::stoi(env_port);
+        }
+        catch (...)
+        {
+            std::cerr << "[Broker WARNING] Variable AETHER_PORT invalida. Usando puerto " << TCP_PORT << ".\n";
+        }
+    }
+
     struct sockaddr_in address;
     std::memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(TCP_PORT); // Convierte a Network Byte Order
+    address.sin_port = htons(port); // Convierte a Network Byte Order
 
     if (bind(tcp_server_fd, (struct sockaddr *)&address, sizeof(address)) < 0)
         return false;
@@ -69,7 +85,7 @@ bool AetherBroker::setup_tcp_socket()
     if (listen(tcp_server_fd, SOMAXCONN) < 0)
         return false;
 
-    std::cout << "[Broker] Escuchando TCP en el puerto " << TCP_PORT << " (Modo No-Bloqueante).\n";
+    std::cout << "[Broker] Escuchando TCP en el puerto " << port << " (Modo No-Bloqueante).\n";
     return true;
 }
 
