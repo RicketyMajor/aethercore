@@ -10,12 +10,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 # Incluir la carpeta de cabeceras
 include_directories(include)
 
-# Buscar todos los archivos fuente en src/
-file(GLOB SOURCES "src/*.cpp")
+# 1. Recopilar todos los archivos fuente
+file(GLOB ALL_SOURCES "src/*.cpp")
 
-# Crear el ejecutable
-add_executable(aethercore ${SOURCES})
+# 2. Excluir el lanzador del binario principal de la base de datos
+list(REMOVE_ITEM ALL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/aether_run.cpp")
 
-# Vincular la librería de threads (necesaria para std::shared_mutex y concurrencia futura)
-find_package(Threads REQUIRED)
-target_link_libraries(aethercore Threads::Threads)
+# 3. Compilar el binario de la Base de Datos (AetherCore)
+add_executable(aethercore ${ALL_SOURCES})
+target_link_libraries(aethercore pthread)
+
+# 4. Compilar el binario del Motor de Contenedores (AetherRun)
+add_executable(aether_run src/aether_run.cpp)
