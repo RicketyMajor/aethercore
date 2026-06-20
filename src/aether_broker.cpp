@@ -350,7 +350,6 @@ void AetherBroker::process_session_buffer(Session *session)
         // 5. ¡SE TIENE EL PAQUETE COMPLETO! se extrae.
         uint32_t opcode_int = static_cast<uint32_t>(header.opcode);
 
-        // Extracción visual para logs (Para validación en esta Fase 3)
         std::string extracted_key(
             session->read_buffer.begin() + sizeof(AetherHeader),
             session->read_buffer.begin() + sizeof(AetherHeader) + header.key_len);

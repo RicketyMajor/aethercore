@@ -10,3 +10,7 @@ obj/
 *.o
 *.out
 *.exe
+
+# Logs del cluster
+logs/
+*.log
